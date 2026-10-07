@@ -16,6 +16,13 @@ const ASSET_BASE_DIR = process.defaultApp
 	: process.resourcesPath;
 const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}${path.sep}`).toString()}`;
 
+// `setIgnoreMouseEvents`'s `forward` option is darwin/win32 only. On Linux nothing is
+// forwarded, so once the HUD goes click-through the renderer stops seeing pointer events
+// entirely — including the pointerenter that is the only thing that would ask for mouse
+// events back. The toolbar deadlocks as permanently inert. Stay interactive there instead;
+// the window is auto-sized to hug the bar, so the cost is only the drop-shadow margin.
+const SUPPORTS_MOUSE_FORWARDING = process.platform === "darwin" || process.platform === "win32";
+
 let hudOverlayWindow: BrowserWindow | null = null;
 
 ipcMain.on("hud-overlay-hide", () => {
@@ -25,6 +32,7 @@ ipcMain.on("hud-overlay-hide", () => {
 });
 
 ipcMain.on("hud-overlay-ignore-mouse-events", (_event, ignore: boolean) => {
+	if (!SUPPORTS_MOUSE_FORWARDING) return;
 	if (hudOverlayWindow && !hudOverlayWindow.isDestroyed()) {
 		hudOverlayWindow.setIgnoreMouseEvents(ignore, { forward: true });
 	}
@@ -124,7 +132,9 @@ export function createHudOverlayWindow(): BrowserWindow {
 			backgroundThrottling: false,
 		},
 	});
-	win.setIgnoreMouseEvents(true, { forward: true });
+	if (SUPPORTS_MOUSE_FORWARDING) {
+		win.setIgnoreMouseEvents(true, { forward: true });
+	}
 
 	// Follow the user across macOS Spaces, else the HUD stays pinned to the Space
 	// it was first opened on.
