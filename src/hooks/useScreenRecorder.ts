@@ -784,7 +784,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	) => {
 		try {
 			const platform = await window.electronAPI.getPlatform();
-			if (platform !== "win32") {
+			// Linux (X11) runs the same native flow through an ffmpeg x11grab helper, the only way
+			// to record without the pointer baked in (Chromium always composites it on X11).
+			if (platform !== "win32" && platform !== "linux") {
 				return false;
 			}
 

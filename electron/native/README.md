@@ -109,3 +109,29 @@ $env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME = "Microphone (NVIDIA Broadcast)
 npm run test:wgc-mic:win
 Remove-Item Env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME
 ```
+
+## Linux (X11)
+
+Chromium composites the pointer into X11 desktop capture regardless of constraints — `cursor: "never"` is ignored by both `getUserMedia({ chromeMediaSource: "desktop" })` and `getDisplayMedia` — so a browser-captured Linux recording always has the system cursor baked in and cannot use the editable cursor overlay. On X11, OpenScreen therefore records through two small helpers in `electron/native/linux-capture`:
+
+- `openscreen-linux-capture.py` records the screen with ffmpeg's `x11grab` and `-draw_mouse 0` (or `1` in system-cursor mode), plus PulseAudio/PipeWire audio (`@DEFAULT_MONITOR@` for system audio, `@DEFAULT_SOURCE@` for the microphone). It speaks the same process contract as the Windows WGC helper — one JSON argument, `pause` / `resume` / `stop` on stdin, `Recording started` / `Recording stopped. Output path: <path>` on stdout — so the existing native-recording IPC handlers and renderer flow drive it unchanged. ffmpeg cannot pause, so each pause ends a segment and `stop` joins the segments losslessly (concat demuxer, stream copy). Display bounds arrive in DIPs with `displayScaleFactor`; window sources are captured with `-window_id`.
+- `openscreen-x11-cursor.py` samples the pointer every interval and prints JSON lines in the same shape as the Windows cursor sampler: position (X screen pixels), the cursor type (`arrow`, `pointer`, `text`, resize/move/wait…) and the left-button state, which `LinuxNativeCursorRecordingSession` turns into `click` / `mouseup` events. The cursor type comes from the XFixes cursor name; cursors set by pixels rather than by name (Chromium does this) are matched against the active cursor theme's images. No cursor images are recorded: samples carry no `assetId`, so the editor draws its bundled art for each `cursorType`.
+
+Both helpers are dependency-free Python 3 (ctypes against `libX11`, `libXfixes` and `libXcursor`, which every X11 desktop ships) and need `ffmpeg` on `PATH`. Helper locations:
+
+1. `OPENSCREEN_LINUX_CAPTURE_HELPER` / `OPENSCREEN_X11_CURSOR_HELPER`, for local development and diagnostics.
+2. `electron/native/linux-capture/` in the app directory (development).
+3. `electron/native/linux-capture/` under `process.resourcesPath` (packaged, via `extraResources`).
+
+`is-native-windows-capture-available` reports Linux as available only in an X11 session (not Wayland or XWayland) with `ffmpeg` present and the helper found; otherwise recording falls back to browser capture exactly as before, and the cursor session falls back to position-only telemetry. In native mode the microphone is the system default input.
+
+Smoke-test the helpers with:
+
+```bash
+# cursor sampler: prints {"type":"ready"} then one sample per tick; move the pointer over a link or a text field
+electron/native/linux-capture/openscreen-x11-cursor.py 100
+
+# recorder: 3 s of the primary display without the cursor, then stop
+(sleep 3; echo stop) | electron/native/linux-capture/openscreen-linux-capture.py \
+  '{"outputPath":"/tmp/openscreen-test.mp4","fps":30,"displayX":0,"displayY":0,"displayW":1920,"displayH":1080,"displayScaleFactor":1}'
+```

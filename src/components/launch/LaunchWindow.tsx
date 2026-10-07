@@ -211,7 +211,9 @@ export function LaunchWindow() {
 			.getPlatform()
 			.then((platform) => {
 				if (!cancelled) {
-					setSupportsCursorModeToggle(platform === "win32" || platform === "darwin");
+					setSupportsCursorModeToggle(
+						platform === "win32" || platform === "darwin" || platform === "linux",
+					);
 				}
 			})
 			.catch(() => {

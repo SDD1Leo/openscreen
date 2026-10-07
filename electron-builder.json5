@@ -82,7 +82,15 @@
     ],
     "icon": "icons/icons/png",
     "artifactName": "${productName}-Linux-${version}.${ext}",
-    "category": "AudioVideo"
+    "category": "AudioVideo",
+    // X11 recorder + cursor sampler (Python, run with the system ffmpeg / python3).
+    "extraResources": [
+      {
+        "from": "electron/native/linux-capture",
+        "to": "electron/native/linux-capture",
+        "filter": ["*.py"]
+      }
+    ]
   },
   "win": {
     "target": [

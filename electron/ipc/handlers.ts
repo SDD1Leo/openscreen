@@ -630,6 +630,9 @@ function getNativeWindowsCaptureHelperCandidates() {
 }
 
 async function findNativeWindowsCaptureHelperPath() {
+	if (process.platform === "linux") {
+		return isNativeLinuxCaptureSupported() ? findNativeLinuxCaptureHelperPath() : null;
+	}
 	if (process.platform !== "win32") {
 		return null;
 	}
@@ -672,6 +675,65 @@ async function findNativeMacCaptureHelperPath() {
 		}
 	}
 
+	return null;
+}
+
+/**
+ * Native capture on Linux needs an X11 session. Chromium composites the pointer into X11 desktop
+ * capture whatever constraint is passed (`cursor: "never"` is ignored), so the editable cursor
+ * overlay needs ffmpeg's x11grab, which can leave it out — see electron/native/linux-capture.
+ * Wayland (incl. XWayland) is excluded: x11grab cannot see native Wayland windows.
+ */
+function isNativeLinuxCaptureSupported() {
+	if (process.platform !== "linux") {
+		return false;
+	}
+	const sessionType = (process.env.XDG_SESSION_TYPE ?? "").toLowerCase();
+	if (sessionType === "wayland" || process.env.WAYLAND_DISPLAY) {
+		return false;
+	}
+	return Boolean(process.env.DISPLAY);
+}
+
+function isNativeCaptureOsSupported() {
+	return isWindowsGraphicsCaptureOsSupported() || isNativeLinuxCaptureSupported();
+}
+
+async function findExecutableOnPath(name: string) {
+	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+		if (!dir) continue;
+		try {
+			await fs.access(path.join(dir, name), fsConstants.X_OK);
+			return path.join(dir, name);
+		} catch {
+			// keep looking
+		}
+	}
+	return null;
+}
+
+async function findNativeLinuxCaptureHelperPath() {
+	if (!(await findExecutableOnPath("ffmpeg"))) {
+		return null;
+	}
+	const candidates = [
+		process.env.OPENSCREEN_LINUX_CAPTURE_HELPER?.trim(),
+		resolveUnpackedAppPath("electron", "native", "linux-capture", "openscreen-linux-capture.py"),
+		resolvePackagedResourcePath(
+			"electron",
+			"native",
+			"linux-capture",
+			"openscreen-linux-capture.py",
+		),
+	].filter((candidate): candidate is string => Boolean(candidate));
+	for (const candidate of candidates) {
+		try {
+			await fs.access(candidate, fsConstants.X_OK);
+			return candidate;
+		} catch {
+			// Try the next configured helper location.
+		}
+	}
 	return null;
 }
 
@@ -1514,7 +1576,7 @@ export function registerIpcHandlers(
 	});
 
 	ipcMain.handle("is-native-windows-capture-available", async () => {
-		if (!isWindowsGraphicsCaptureOsSupported()) {
+		if (!isNativeCaptureOsSupported()) {
 			return { success: true, available: false, reason: "unsupported-os" };
 		}
 
@@ -1539,10 +1601,13 @@ export function registerIpcHandlers(
 		"start-native-windows-recording",
 		async (_, request: NativeWindowsRecordingRequest) => {
 			try {
-				if (!isWindowsGraphicsCaptureOsSupported()) {
+				if (!isNativeCaptureOsSupported()) {
 					return {
 						success: false,
-						error: "Windows Graphics Capture requires Windows 10 build 19041 or newer.",
+						error:
+							process.platform === "linux"
+								? "Native Linux capture needs an X11 session."
+								: "Windows Graphics Capture requires Windows 10 build 19041 or newer.",
 					};
 				}
 				if (nativeWindowsCaptureProcess) {
@@ -1580,9 +1645,10 @@ export function registerIpcHandlers(
 					typeof request.source.displayId === "number" && Number.isFinite(request.source.displayId)
 						? request.source.displayId
 						: Number(selectedSource?.display_id);
-				const webcamDirectShowClsid = request.webcam.enabled
-					? await resolveDirectShowWebcamClsid(request.webcam.deviceName)
-					: null;
+				const webcamDirectShowClsid =
+					request.webcam.enabled && process.platform === "win32"
+						? await resolveDirectShowWebcamClsid(request.webcam.deviceName)
+						: null;
 				const cursorCaptureMode =
 					normalizeCursorCaptureMode(request.cursor?.mode) ?? "editable-overlay";
 				const config = {
@@ -1600,6 +1666,8 @@ export function registerIpcHandlers(
 					displayY: bounds.y,
 					displayW: bounds.width,
 					displayH: bounds.height,
+					// Bounds are DIPs; the Linux helper grabs X screen pixels.
+					displayScaleFactor: sourceDisplay?.scaleFactor ?? screen.getPrimaryDisplay().scaleFactor,
 					hasDisplayBounds: true,
 					captureSystemAudio: request.audio.system.enabled,
 					captureMic: request.audio.microphone.enabled,
